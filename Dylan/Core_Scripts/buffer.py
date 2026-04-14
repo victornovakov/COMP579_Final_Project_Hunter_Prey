@@ -50,7 +50,7 @@ class ReplayBuffer:
 # ═════════════════════════════════════════════════════════════════════════════
 # On-policy rollout buffer (PPO)
 # ═════════════════════════════════════════════════════════════════════════════
-
+#this is the only one that we are going to be using.
 class RolloutBuffer:
     """
     Collects a full rollout (one epoch of environment steps), then yields it

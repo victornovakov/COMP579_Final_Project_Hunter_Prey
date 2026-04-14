@@ -94,7 +94,7 @@ class PPOAgent:
             lr=lr, eps=1e-5,
         )
 
-        self.buffer = RolloutBuffer()
+        self.buffers = {}
         self._cache = deque()
 
     # ── Action selection ──────────────────────────────────────────────
@@ -121,7 +121,10 @@ class PPOAgent:
 
     def store_transition(self, obs, action, reward, next_obs, done, **kwargs):
         log_prob, value = self._cache.popleft()
-        self.buffer.push(obs, action, log_prob, reward, done, value)
+        bid = kwargs.get("buffer_id", "default")
+        if bid not in self.buffers:
+            self.buffers[bid] = RolloutBuffer()
+        self.buffers[bid].push(obs, action, log_prob, reward, done, value)
 
     # ── Updates ───────────────────────────────────────────────────────
 
@@ -129,21 +132,20 @@ class PPOAgent:
         return {}
 
     def episode_update(self):
-        if len(self.buffer) == 0:
+        active = [b for b in self.buffers.values() if len(b) > 0]
+        if not active:
             return {}
 
-        self.buffer.compute_returns(
-            last_value=0.0,
-            gamma=self.gamma,
-            lam=self.gae_lambda,
-        )
-        batch = self.buffer.get_batch()
+        batches = []
+        for buf in active:
+            buf.compute_returns(last_value=0.0, gamma=self.gamma, lam=self.gae_lambda)
+            batches.append(buf.get_batch())
 
-        obs = torch.as_tensor(batch["obs"], device=self.device)
-        actions = torch.as_tensor(batch["actions"], device=self.device)
-        old_log_probs = torch.as_tensor(batch["log_probs"], device=self.device)
-        returns = torch.as_tensor(batch["returns"], device=self.device)
-        advantages = torch.as_tensor(batch["advantages"], device=self.device)
+        obs = torch.as_tensor(np.concatenate([b["obs"] for b in batches]), device=self.device)
+        actions = torch.as_tensor(np.concatenate([b["actions"] for b in batches]), device=self.device)
+        old_log_probs = torch.as_tensor(np.concatenate([b["log_probs"] for b in batches]), device=self.device)
+        returns = torch.as_tensor(np.concatenate([b["returns"] for b in batches]), device=self.device)
+        advantages = torch.as_tensor(np.concatenate([b["advantages"] for b in batches]), device=self.device)
 
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 

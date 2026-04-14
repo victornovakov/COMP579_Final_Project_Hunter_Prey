@@ -102,7 +102,7 @@ class MAPPOAgent:
             lr=lr, eps=1e-5,
         )
 
-        self.buffer = RolloutBuffer()
+        self.buffers = {}
         self._cache = deque()
 
     # ── Action selection ──────────────────────────────────────────────
@@ -137,8 +137,11 @@ class MAPPOAgent:
 
     def store_transition(self, obs, action, reward, next_obs, done, **kwargs):
         log_prob, value, global_obs_flat = self._cache.popleft()
-        self.buffer.push(obs, action, log_prob, reward, done, value,
-                         global_obs=global_obs_flat)
+        bid = kwargs.get("buffer_id", "default")
+        if bid not in self.buffers:
+            self.buffers[bid] = RolloutBuffer()
+        self.buffers[bid].push(obs, action, log_prob, reward, done, value,
+                               global_obs=global_obs_flat)
 
     # ── Updates ───────────────────────────────────────────────────────
 
@@ -146,22 +149,21 @@ class MAPPOAgent:
         return {}
 
     def episode_update(self):
-        if len(self.buffer) == 0:
+        active = [b for b in self.buffers.values() if len(b) > 0]
+        if not active:
             return {}
 
-        self.buffer.compute_returns(
-            last_value=0.0,
-            gamma=self.gamma,
-            lam=self.gae_lambda,
-        )
-        batch = self.buffer.get_batch()
+        batches = []
+        for buf in active:
+            buf.compute_returns(last_value=0.0, gamma=self.gamma, lam=self.gae_lambda)
+            batches.append(buf.get_batch())
 
-        obs = torch.as_tensor(batch["obs"], device=self.device)
-        actions = torch.as_tensor(batch["actions"], device=self.device)
-        old_log_probs = torch.as_tensor(batch["log_probs"], device=self.device)
-        returns = torch.as_tensor(batch["returns"], device=self.device)
-        advantages = torch.as_tensor(batch["advantages"], device=self.device)
-        global_obs = torch.as_tensor(batch["global_obs"], device=self.device)
+        obs = torch.as_tensor(np.concatenate([b["obs"] for b in batches]), device=self.device)
+        actions = torch.as_tensor(np.concatenate([b["actions"] for b in batches]), device=self.device)
+        old_log_probs = torch.as_tensor(np.concatenate([b["log_probs"] for b in batches]), device=self.device)
+        returns = torch.as_tensor(np.concatenate([b["returns"] for b in batches]), device=self.device)
+        advantages = torch.as_tensor(np.concatenate([b["advantages"] for b in batches]), device=self.device)
+        global_obs = torch.as_tensor(np.concatenate([b["global_obs"] for b in batches]), device=self.device)
 
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
@@ -227,13 +229,4 @@ class MAPPOAgent:
         torch.save({
             "actor": self.actor.state_dict(),
             "critic": self.critic.state_dict(),
-            "optimizer": self.optimizer.state_dict(),
-            "global_obs_dim": self.global_obs_dim,
-        }, filepath)
-
-    def load(self, filepath):
-        ckpt = torch.load(filepath, map_location=self.device)
-        self.actor.load_state_dict(ckpt["actor"])
-        self.critic.load_state_dict(ckpt["critic"])
-        if "optimizer" in ckpt:
-            self.optimizer.load_state_dict(ckpt["optimizer"])
+            "optimizer": self.optimizer.

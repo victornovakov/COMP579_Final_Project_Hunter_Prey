@@ -32,7 +32,7 @@ AGENT_REGISTRY = {
 }
 
 
-def build_agent(agent_type, obs_dim, act_dim, global_obs_dim=None):
+def build_agent(agent_type, obs_dim, act_dim, global_obs_dim=None, entropy_coef=None):
     """Instantiate an agent by its registry name."""
     entry = AGENT_REGISTRY[agent_type]
     if agent_type == "random":
@@ -40,10 +40,13 @@ def build_agent(agent_type, obs_dim, act_dim, global_obs_dim=None):
     print(f"  Loading {agent_type} class...", flush=True)
     cls = entry()
     print(f"  Class loaded. Creating instance...", flush=True)
+    kwargs = {}
+    if entropy_coef is not None:
+        kwargs["entropy_coef"] = entropy_coef
     if agent_type == "mappo":
-        agent = cls(obs_dim, act_dim, global_obs_dim=global_obs_dim)
+        agent = cls(obs_dim, act_dim, global_obs_dim=global_obs_dim, **kwargs)
     else:
-        agent = cls(obs_dim, act_dim)
+        agent = cls(obs_dim, act_dim, **kwargs)
     print(f"  Instance created.", flush=True)
     return agent
 
@@ -67,13 +70,15 @@ def run(args):
     # ── Build agent_map: agent_name → agent instance ──────────────────
     agent_map = {}
 
+    ent_coef = getattr(args, "entropy_coef", None)
+
     if sharing:
         print(f"Building shared predator agent ({args.predator_agent})...", flush=True)
         pred_agent = build_agent(args.predator_agent, pred_obs, pred_act,
-                                 global_obs_dim=global_obs_dim)
+                                 global_obs_dim=global_obs_dim, entropy_coef=ent_coef)
         print(f"Building shared prey agent ({args.prey_agent})...", flush=True)
         prey_agent = build_agent(args.prey_agent, prey_obs, prey_act,
-                                 global_obs_dim=global_obs_dim)
+                                 global_obs_dim=global_obs_dim, entropy_coef=ent_coef)
         for name in env.possible_agents:
             agent_map[name] = pred_agent if get_role(name) == "predator" else prey_agent
     else:
@@ -83,7 +88,7 @@ def run(args):
             obs_d, act_d = dims[role]
             print(f"Building independent agent for {name} ({atype})...", flush=True)
             agent_map[name] = build_agent(atype, obs_d, act_d,
-                                          global_obs_dim=global_obs_dim)
+                                          global_obs_dim=global_obs_dim, entropy_coef=ent_coef)
 
     print("Agents ready.", flush=True)
 
@@ -130,6 +135,10 @@ def run(args):
     print(f"  catch_bonus    : {cfg['predator_catch_bonus']}", flush=True)
     print(f"  prox_reward    : {cfg['predator_proximity_reward']}", flush=True)
     print(f"  prox_penalty   : {cfg['prey_proximity_penalty']}", flush=True)
+    print(f"  step_penalty   : {cfg['predator_step_penalty']}", flush=True)
+    print(f"  no_catch_pen   : {cfg.get('predator_no_catch_step_penalty', 0.0)}", flush=True)
+    if ent_coef is not None:
+        print(f"  entropy_coef   : {ent_coef}", flush=True)
     if args.load_predator_weights:
         print(f"  Pred weights   : {args.load_predator_weights}", flush=True)
     if args.load_prey_weights:
@@ -139,10 +148,43 @@ def run(args):
 
     t_start = time.time()
 
+    self_size = 5
+    obs_size = 6
+    dist_offset = 2
+
+    def _closest_prey_dist(o):
+        """Extract closest prey distance from a predator observation."""
+        start = self_size + cfg["predator_observe_count"] * obs_size
+        dists = [
+            o[start + i * obs_size + dist_offset]
+            for i in range(cfg["prey_observe_count"])
+            if start + i * obs_size + dist_offset < len(o)
+        ]
+        nonzero = [d for d in dists if d > 0]
+        return min(nonzero) if nonzero else 1.0
+
+    def _closest_pred_dist(o):
+        """Extract closest predator distance from a prey observation."""
+        start = self_size
+        dists = [
+            o[start + i * obs_size + dist_offset]
+            for i in range(cfg["predator_observe_count"])
+            if start + i * obs_size + dist_offset < len(o)
+        ]
+        nonzero = [d for d in dists if d > 0]
+        return min(nonzero) if nonzero else 1.0
+
+    prev_pred_dists = {}
+
     for episode in range(1, args.episodes + 1):
         obs, infos = env.reset(seed=args.seed)
         team_rewards = {"predator": 0.0, "prey": 0.0}
         episode_steps = 0
+
+        prev_pred_dists.clear()
+        for name in env.possible_agents:
+            if get_role(name) == "predator" and name in obs:
+                prev_pred_dists[name] = _closest_prey_dist(obs[name])
 
         while env.agents:
             global_obs_flat = np.concatenate(
@@ -161,14 +203,33 @@ def run(args):
                 env.render()
 
             # ── reward shaping ────────────────────────────────────────
+            # Count prey deaths in this step.
+            # NOTE: reward magnitudes depend on ENV_CONFIG (e.g. prey_punishment can be 1),
+            # so we must NOT use a hard-coded threshold like -500.
+            # In this env setup, prey rewards are non-negative except on death.
             prey_deaths = sum(
                 1 for name, r in rewards.items()
-                if name.startswith("prey") and r <= -500
+                if name.startswith("prey") and r < 0
             )
             if prey_deaths > 0:
                 for name in rewards:
                     if name.startswith("predator"):
                         rewards[name] += cfg["predator_catch_bonus"] * prey_deaths
+
+            nc_pen = cfg.get("predator_no_catch_step_penalty", 0.0)
+            if nc_pen > 0 and prey_deaths == 0:
+                for name in rewards:
+                    if name.startswith("predator"):
+                        rewards[name] -= nc_pen
+
+            step_pen = cfg["predator_step_penalty"]
+            if step_pen > 0 and next_obs:
+                for name in rewards:
+                    if name.startswith("predator"):
+                        o = next_obs.get(name)
+                        if o is not None:
+                            speed = o[4]  # self-state index 4 = normalized speed
+                            rewards[name] -= step_pen * speed
 
             prox_pred = cfg["predator_proximity_reward"]
             prox_prey = cfg["prey_proximity_penalty"]
@@ -179,17 +240,13 @@ def run(args):
                         continue
                     role = get_role(name)
                     if role == "predator" and prox_pred > 0:
-                        n_obs = cfg["prey_observe_count"]
-                        prey_dists = [o[4 + i * 6] for i in range(n_obs) if 4 + i * 6 < len(o)]
-                        if prey_dists:
-                            closest = min(prey_dists)
-                            rewards[name] += prox_pred * (1.0 - closest)
+                        curr_dist = _closest_prey_dist(o)
+                        prev_dist = prev_pred_dists.get(name, curr_dist)
+                        rewards[name] += prox_pred * (prev_dist - curr_dist)
+                        prev_pred_dists[name] = curr_dist
                     elif role == "prey" and prox_prey > 0:
-                        n_obs = cfg["predator_observe_count"]
-                        pred_dists = [o[4 + i * 6] for i in range(n_obs) if 4 + i * 6 < len(o)]
-                        if pred_dists:
-                            closest = min(pred_dists)
-                            rewards[name] -= prox_prey * (1.0 - closest)
+                        curr_dist = _closest_pred_dist(o)
+                        rewards[name] -= prox_prey * (1.0 - curr_dist)
 
             for agent_name in actions:
                 role = get_role(agent_name)
@@ -199,6 +256,7 @@ def run(args):
                     obs[agent_name], actions[agent_name],
                     rewards.get(agent_name, 0.0), next_o, done,
                     global_obs=global_obs_flat,
+                    buffer_id=agent_name,
                 )
                 team_rewards[role] += rewards.get(agent_name, 0.0)
 
@@ -276,6 +334,8 @@ def _parse_env_overrides(args):
     """Map CLI flags to ENV_CONFIG overrides."""
     overrides = {}
     mapping = {
+        "width": "width",
+        "height": "height",
         "prey_count": "prey_count",
         "predator_count": "predator_count",
         "max_steps": "max_time_steps",
@@ -283,9 +343,12 @@ def _parse_env_overrides(args):
         "fov_enabled": "fov_enabled",
         "predator_view_distance": "predator_view_distance",
         "prey_view_distance": "prey_view_distance",
+        "predator_max_velocity": "predator_max_velocity",
         "predator_catch_bonus": "predator_catch_bonus",
         "predator_proximity_reward": "predator_proximity_reward",
         "prey_proximity_penalty": "prey_proximity_penalty",
+        "predator_step_penalty": "predator_step_penalty",
+        "predator_no_catch_step_penalty": "predator_no_catch_step_penalty",
     }
     for cli_key, cfg_key in mapping.items():
         val = getattr(args, cli_key, None)
@@ -293,6 +356,9 @@ def _parse_env_overrides(args):
             overrides[cfg_key] = val
     if args.no_fov:
         overrides["fov_enabled"] = False
+        world_diag = int((ENV_CONFIG["width"] ** 2 + ENV_CONFIG["height"] ** 2) ** 0.5) + 50
+        overrides.setdefault("predator_view_distance", world_diag)
+        overrides.setdefault("prey_view_distance", world_diag)
     return overrides
 
 
@@ -313,12 +379,16 @@ def parse_args():
     p.add_argument("--print_every", type=int, default=10)
     p.add_argument("--no_sharing", action="store_true",
                    help="independent policy per agent (no parameter sharing)")
+    p.add_argument("--entropy_coef", type=float, default=None,
+                   help="entropy bonus coefficient (default: agent default, 0.01)")
 
     # ── weight loading ──
     p.add_argument("--load_predator_weights", type=str, default=None)
     p.add_argument("--load_prey_weights", type=str, default=None)
 
     # ── environment overrides ──
+    p.add_argument("--width", type=int, default=None, help="tank width (pixels)")
+    p.add_argument("--height", type=int, default=None, help="tank height (pixels)")
     p.add_argument("--prey_count", type=int, default=None)
     p.add_argument("--predator_count", type=int, default=None)
     p.add_argument("--max_steps", type=int, default=None)
@@ -326,6 +396,8 @@ def parse_args():
     p.add_argument("--no_fov", action="store_true", help="disable FOV cone (see all N nearest)")
     p.add_argument("--predator_view_distance", type=int, default=None)
     p.add_argument("--prey_view_distance", type=int, default=None)
+    p.add_argument("--predator_max_velocity", type=float, default=None,
+                   help="override predator max speed (default from ENV_CONFIG)")
 
     # ── reward shaping overrides ──
     p.add_argument("--predator_catch_bonus", type=float, default=None)
@@ -333,6 +405,10 @@ def parse_args():
                    help="per-step bonus for predator approaching prey (0 = off)")
     p.add_argument("--prey_proximity_penalty", type=float, default=None,
                    help="per-step penalty for prey being near predator (0 = off)")
+    p.add_argument("--predator_step_penalty", type=float, default=None,
+                   help="per-step cost for predators, multiplied by normalized speed (movement tax)")
+    p.add_argument("--predator_no_catch_step_penalty", type=float, default=None,
+                   help="subtract this much from predator reward each step with no prey death (catch)")
 
     return p.parse_args()
 

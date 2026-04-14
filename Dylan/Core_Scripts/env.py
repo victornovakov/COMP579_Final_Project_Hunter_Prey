@@ -13,8 +13,9 @@ Usage:
 """
 
 import os
-os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
-os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+if not os.environ.get("_AQUARIUM_RENDER"):
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 
 from marl_aquarium import aquarium_v0
 from marl_aquarium.env.aquarium import raw_env as _RawEnv
@@ -151,8 +152,8 @@ ENV_CONFIG = {
     # ── Catching / rewards ────────────────────────────────────────────────
     "catch_radius": 120,             # proximity for catch event
     "predator_reward": 10,           # base env reward per catch (broken w/ constant prey)
-    "prey_reward": 1,                # per-step survival reward per prey
-    "prey_punishment": 1000,         # death penalty for prey
+    "prey_reward": 0,                # per-step survival reward per prey
+    "prey_punishment": 1,         # death penalty for prey
 
     # ── Spawning / lifecycle ──────────────────────────────────────────────
     "keep_prey_count_constant": True,  # True = prey respawn (must be True, env bug)
@@ -165,6 +166,8 @@ ENV_CONFIG = {
     "predator_catch_bonus": 10.0,       # reward given to predator when prey dies
     "predator_proximity_reward": 0.0,   # per-step reward scaled by closeness to prey
     "prey_proximity_penalty": 0.0,      # per-step penalty for prey being near predator
+    "predator_step_penalty": 0.0,       # per-step cost scaled by speed (movement tax)
+    "predator_no_catch_step_penalty": 0.0,  # subtract each step when no prey caught this step
 }
 
 
@@ -173,7 +176,13 @@ ENV_CONFIG = {
 # ═════════════════════════════════════════════════════════════════════════════
 
 # Keys that are OUR custom additions (not passed to marl_aquarium)
-_CUSTOM_KEYS = {"predator_catch_bonus", "predator_proximity_reward", "prey_proximity_penalty"}
+_CUSTOM_KEYS = {
+    "predator_catch_bonus",
+    "predator_proximity_reward",
+    "prey_proximity_penalty",
+    "predator_step_penalty",
+    "predator_no_catch_step_penalty",
+}
 
 
 def make_env(render=False, **overrides):
