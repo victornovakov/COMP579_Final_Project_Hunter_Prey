@@ -1,5 +1,4 @@
 
-
 import os
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
@@ -188,7 +187,7 @@ def run(args):
 
         while env.agents:
             global_obs_flat = np.concatenate(
-                [obs[n] for n in env.possible_agents if n in obs]
+                [obs[n] for n in env.possible_agents if n in obs and get_role(n) == "predator"]
             )
 
             actions = {}

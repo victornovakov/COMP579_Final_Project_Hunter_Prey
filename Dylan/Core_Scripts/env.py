@@ -224,9 +224,10 @@ def get_space_dims(env):
     return dims
 
 
-def get_global_obs_dim(env):
-    """Total observation dimension across all agents (for MAPPO centralized critic)."""
-    return sum(env.observation_space(a).shape[0] for a in env.possible_agents)
+def get_global_obs_dim(env, role="predator"):
+    """Observation dimension across same-team agents (for MAPPO centralized critic)."""
+    return sum(env.observation_space(a).shape[0]
+               for a in env.possible_agents if get_role(a) == role)
 
 
 def get_role(agent_name):

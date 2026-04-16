@@ -229,4 +229,13 @@ class MAPPOAgent:
         torch.save({
             "actor": self.actor.state_dict(),
             "critic": self.critic.state_dict(),
-            "optimizer": self.optimizer.
+            "optimizer": self.optimizer.state_dict(),
+            "global_obs_dim": self.global_obs_dim,
+        }, filepath)
+
+    def load(self, filepath):
+        ckpt = torch.load(filepath, map_location=self.device)
+        self.actor.load_state_dict(ckpt["actor"])
+        self.critic.load_state_dict(ckpt["critic"])
+        if "optimizer" in ckpt:
+            self.optimizer.load_state_dict(ckpt["optimizer"])

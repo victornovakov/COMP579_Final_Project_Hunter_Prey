@@ -40,9 +40,18 @@ def _make_label(run_name):
     return run_name.replace("_", " ")
 
 
+def _read_metrics_csv(csv_path):
+    """Read metrics CSV; skip malformed rows (e.g. interrupted writes, CR glitches)."""
+    kwargs = {"engine": "python"}
+    try:
+        return pd.read_csv(csv_path, on_bad_lines="skip", **kwargs)
+    except TypeError:
+        return pd.read_csv(csv_path, error_bad_lines=False, warn_bad_lines=False, **kwargs)
+
+
 def load_run(csv_path, window=20):
     """Load a metrics CSV and add smoothed columns."""
-    df = pd.read_csv(csv_path)
+    df = _read_metrics_csv(csv_path)
     for col in ["predator_reward", "prey_reward"]:
         if col in df.columns:
             df[f"{col}_smooth"] = df[col].rolling(window, min_periods=1).mean()
@@ -66,7 +75,7 @@ def enrich_labels(runs, log_dir):
     for run in runs:
         label_parts = []
         base = run["label"]
-        df = pd.read_csv(run["csv"], nrows=1)
+        df = _read_metrics_csv(run["csv"]).head(1)
 
         cols = df.columns.tolist()
         has_pred0 = any("predator_0_" in c for c in cols)
@@ -173,7 +182,7 @@ def main():
 
     print(f"Found {len(runs)} runs:")
     for r in runs:
-        df = pd.read_csv(r["csv"])
+        df = _read_metrics_csv(r["csv"])
         print(f"  {r['rich_label']:<30s}  ({len(df)} episodes)  [{r['name']}]")
     print()
 

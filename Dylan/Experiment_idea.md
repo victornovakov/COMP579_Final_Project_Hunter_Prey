@@ -326,6 +326,121 @@ All 2-predator experiments above were run BEFORE this fix and should be re-run.
   prox_penalty   : 0.0
   step_penalty   : 0.0
   no_catch_pen   : 0.0
+
+  ->hmmm I see something at 15k but im not sure how great it is... still quite flat
+============================================================
+ppo buffer fix try now (40k)
+============================================================
+  EXPERIMENT STARTED
+  Run name       : ppo_vs_random_1776200514
+  Predator agent : ppo  (obs=29, act=16)
+  Prey agent     : random  (obs=29, act=16)
+  Param sharing  : True
+  Unique agents  : 2
+  Episodes       : 15000
+  Agents         : ['predator_0', 'predator_1', 'prey_0', 'prey_1', 'prey_2']
+  max_steps      : 1000
+  catch_radius   : 50
+  fov_enabled    : False
+  catch_bonus    : 10.0
+  prox_reward    : 0.0
+  prox_penalty   : 0.0
+  step_penalty   : 0.0
+  no_catch_pen   : 0.0
+  -> better reward than mappo, we actually do see some sort of learning (50-100)
+  ->Still looks a little noiser than the 40k without the buffer fix and the singular predator in train
+  -> Important note - the pred have access to all of the world at once with fov turned off
+============================================================
+-> Takeaway after these two tests:
+MAPPO's centralized critic provides no advantage over PPO when agents have full observability, and may even hurt [we do observe this] due to increased input dimensionality.
+
+Also: The MAPPO centralized critic should only see predator team observations, not the prey's. Including the 3 random prey observations (87 extra dims of noise) makes the critic's job much harder. The PPO local critic only sees 29 dims of useful signal, while MAPPO's critic sees 145 dims where 87 are useless noise. This may be why our observations are so noisy.
+
+Going to change it such that the mappo critic only sees pred team observations and ignore the noise data from the prey
+
+Lets prove the above hypotethis....
+============================================================
+--> enabling pov, changed the critic to only see pred team trying to observe whether MAPPO leads to an advantage over PPO. 15k to keep it short for now.
+
+  EXPERIMENT STARTED
+  Run name       : mappo_vs_random_1776303167
+  Predator agent : mappo  (obs=29, act=16)
+  Prey agent     : random  (obs=29, act=16)
+  Param sharing  : True
+  Unique agents  : 2
+  Episodes       : 15000
+  Agents         : ['predator_0', 'predator_1', 'prey_0', 'prey_1', 'prey_2']
+  max_steps      : 1000
+  catch_radius   : 50
+  fov_enabled    : True
+  catch_bonus    : 10.0
+  prox_reward    : 0.0
+  prox_penalty   : 0.0
+  step_penalty   : 0.0
+  no_catch_pen   : 0.0
+
+
+  EXPERIMENT STARTED
+  Run name       : ppo_vs_random_1776303167
+  Predator agent : ppo  (obs=29, act=16)
+  Prey agent     : random  (obs=29, act=16)
+  Param sharing  : True
+  Unique agents  : 2
+  Episodes       : 15000
+  Agents         : ['predator_0', 'predator_1', 'prey_0', 'prey_1', 'prey_2']
+  max_steps      : 1000
+  catch_radius   : 50
+  fov_enabled    : True
+  catch_bonus    : 10.0
+  prox_reward    : 0.0
+  prox_penalty   : 0.0
+  step_penalty   : 0.0
+  no_catch_pen   : 0.0
+
+
+  --> looks good, both seem to be seeing some sort of reward. The FOV fix in mappo has definitely contributed to something.
+--> at this point we have some results to talk about.
+
+
+============================================================
+-> Now lets try tuning around with the proximity reward on the predator a bit
+--> starting with a mappo
+  EXPERIMENT STARTED
+  Run name       : mappo_vs_random_1776342005
+  Predator agent : mappo  (obs=29, act=16)
+  Prey agent     : random  (obs=29, act=16)
+  Param sharing  : True
+  Unique agents  : 2
+  Episodes       : 15000
+  Agents         : ['predator_0', 'predator_1', 'prey_0', 'prey_1', 'prey_2']
+  max_steps      : 1000
+  catch_radius   : 50
+  fov_enabled    : False
+  catch_bonus    : 10.0
+  prox_reward    : 0.1
+  prox_penalty   : 0.0
+  step_penalty   : 0.0
+  no_catch_pen   : 0.0
+
+  --> pretty similar, maybe a little bit less noisy than without the prox reward.
 ============================================================
 
-
+============================================================
+--> what happens when we increase the predators
+  EXPERIMENT STARTED
+  Run name       : mappo_vs_random_1776366639
+  Predator agent : mappo  (obs=29, act=16)
+  Prey agent     : random  (obs=29, act=16)
+  Param sharing  : True
+  Unique agents  : 2
+  Episodes       : 15000
+  Agents         : ['predator_0', 'predator_1', 'predator_2', 'predator_3', 'prey_0', 'prey_1', 'prey_2', 'prey_3', 'prey_4', 'prey_5', 'prey_6']
+  max_steps      : 1000
+  catch_radius   : 50
+  fov_enabled    : False
+  catch_bonus    : 10.0
+  prox_reward    : 0.0
+  prox_penalty   : 0.0
+  step_penalty   : 0.0
+  no_catch_pen   : 0.0
+============================================================
