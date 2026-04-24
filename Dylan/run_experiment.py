@@ -8,6 +8,7 @@ import argparse
 import sys
 import time
 import numpy as np
+import torch
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -34,12 +35,15 @@ AGENT_REGISTRY = {
 def build_agent(agent_type, obs_dim, act_dim, global_obs_dim=None, entropy_coef=None):
     """Instantiate an agent by its registry name."""
     entry = AGENT_REGISTRY[agent_type]
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     if agent_type == "random":
         return entry(obs_dim, act_dim)
     print(f"  Loading {agent_type} class...", flush=True)
+    print(f"  Using device: {device}", flush=True)
     cls = entry()
     print(f"  Class loaded. Creating instance...", flush=True)
-    kwargs = {}
+    kwargs = {"device": device}
     if entropy_coef is not None:
         kwargs["entropy_coef"] = entropy_coef
     if agent_type == "mappo":
@@ -136,6 +140,8 @@ def run(args):
     print(f"  prox_penalty   : {cfg['prey_proximity_penalty']}", flush=True)
     print(f"  step_penalty   : {cfg['predator_step_penalty']}", flush=True)
     print(f"  no_catch_pen   : {cfg.get('predator_no_catch_step_penalty', 0.0)}", flush=True)
+    print(f"  update_every   : {args.update_every}", flush=True)
+    print(f"  device         : {'cuda' if torch.cuda.is_available() else 'cpu'}", flush=True)
     if ent_coef is not None:
         print(f"  entropy_coef   : {ent_coef}", flush=True)
     if args.load_predator_weights:
@@ -265,12 +271,13 @@ def run(args):
             obs = next_obs
             episode_steps += 1
 
-        # Per-episode updates — call once per unique agent instance
+        # Update every args.update_every episodes (or on the final episode)
         update_info = {}
-        for label, ag in unique_agents.values():
-            info = ag.episode_update()
-            for k, v in info.items():
-                update_info[f"{label}_{k}"] = v
+        if episode % args.update_every == 0 or episode == args.episodes:
+            for label, ag in unique_agents.values():
+                info = ag.episode_update()
+                for k, v in info.items():
+                    update_info[f"{label}_{k}"] = v
 
         metrics = {
             "episode_length": episode_steps,
@@ -376,6 +383,8 @@ def parse_args():
     p.add_argument("--tensorboard", action="store_true")
     p.add_argument("--save_weights", action="store_true")
     p.add_argument("--print_every", type=int, default=10)
+    p.add_argument("--update_every", type=int, default=8,
+                   help="run PPO update once per this many episodes (larger = bigger GPU batches)")
     p.add_argument("--no_sharing", action="store_true",
                    help="independent policy per agent (no parameter sharing)")
     p.add_argument("--entropy_coef", type=float, default=None,

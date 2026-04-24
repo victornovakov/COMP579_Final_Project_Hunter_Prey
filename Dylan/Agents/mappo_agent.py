@@ -78,7 +78,7 @@ class MAPPOAgent:
         value_coef=0.5,
         max_grad_norm=0.5,
         ppo_epochs=4,
-        mini_batch_size=64,
+        mini_batch_size=512,
         device=None,
     ):
         self.obs_dim = obs_dim
